@@ -1,0 +1,38 @@
+/market_making_bot
+│
+├── /data/                        # For storing historical market data and logs
+│   ├── logs/                     # Logs for tracking bot activities
+│   ├── market_data/              # Historical and live market data (optional, for analysis)
+│   └── order_logs/               # Order history logs for performance tracking
+│
+├── /modules/                     # Core modules of the bot
+│   ├── __init__.py               # Python package initializer
+│   ├── market_data_fetcher.py    # Market Data Fetching Module
+│   ├── trading_logic.py          # Trading Logic Module
+│   ├── risk_management.py        # Risk Management Module
+│   ├── order_execution.py        # Order Execution Module
+│   ├── monitoring_alerts.py      # Monitoring & Alerts Module
+│   └── backtesting_simulation.py # Backtesting & Simulation Module
+│
+├── /config/                      # Configuration files for different environments
+│   ├── config_sandbox.yaml       # Sandbox configuration (API keys, thresholds)
+│   ├── config_live.yaml          # Live configuration for production environment
+│   └── config_backtest.yaml      # Configuration for backtesting environment
+│
+├── /scripts/                     # Scripts for running and managing the bot
+│   ├── start_bot.py              # Script to start the bot (live trading)
+│   ├── run_backtest.py           # Script to run backtesting
+│   ├── monitor_bot.py            # Script for monitoring bot performance
+│   └── utils.py                  # Utility functions (e.g., data cleaning, helper functions)
+│
+├── /tests/                       # Unit and integration tests for each module
+│   ├── test_market_data_fetcher.py
+│   ├── test_trading_logic.py
+│   ├── test_risk_management.py
+│   ├── test_order_execution.py
+│   └── test_backtesting_simulation.py
+│
+├── requirements.txt              # Python dependencies and libraries (e.g., ccxt, Solana SDK)
+├── Dockerfile                    # Dockerfile to containerize the bot
+├── README.md                     # Documentation for setting up and using the bot
+└── .env
