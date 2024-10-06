@@ -20,7 +20,7 @@ RETRY_DELAY = 20  # Delay in seconds after hitting a rate limit
 BATCH_SIZE = 5  # Small batch size for processing transactions (for testing)
 
 # Construct the correct relative path to the database file
-db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../data/market_data/transactions.db'))
+db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../data/market_data/transactions.db'))
 
 # Set up SQLite connection and schema
 conn = sqlite3.connect(db_path)  # Use the correct relative path
