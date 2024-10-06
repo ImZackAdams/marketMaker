@@ -5,9 +5,15 @@
 │   ├── market_data/              # Historical and live market data (optional, for analysis)
 │   └── order_logs/               # Order history logs for performance tracking
 │
-├── /modules/                     # Core modules of the bot
+├── /modules/                  # Core modules of the bot
 │   ├── __init__.py               # Python package initializer
-│   ├── market_data_fetcher.py    # Market Data Fetching Module
+│   ├── /data_collectors/         # Subdirectory for all data collection scripts
+│   │   ├── __init__.py           # Python package initializer for data collection module
+│   │   ├── transaction_data_collector.py  # Collects swap transactions
+│   │   ├── order_book_data_collector.py   # Collects order book snapshots
+│   │   ├── liquidity_data_collector.py    # Tracks liquidity pool balance
+│   │   ├── price_data_collector.py        # Collects price data
+│   ├── market_data_fetcher.py    # Market Data Fetching Module (Orchestrates above collectors)
 │   ├── trading_logic.py          # Trading Logic Module
 │   ├── risk_management.py        # Risk Management Module
 │   ├── order_execution.py        # Order Execution Module
@@ -26,7 +32,10 @@
 │   └── utils.py                  # Utility functions (e.g., data cleaning, helper functions)
 │
 ├── /tests/                       # Unit and integration tests for each module
-│   ├── test_market_data_fetcher.py
+│   ├── test_transaction_data_collector.py
+│   ├── test_order_book_data_collector.py
+│   ├── test_liquidity_data_collector.py
+│   ├── test_price_data_collector.py
 │   ├── test_trading_logic.py
 │   ├── test_risk_management.py
 │   ├── test_order_execution.py
@@ -35,4 +44,45 @@
 ├── requirements.txt              # Python dependencies and libraries (e.g., ccxt, Solana SDK)
 ├── Dockerfile                    # Dockerfile to containerize the bot
 ├── README.md                     # Documentation for setting up and using the bot
-└── .env
+└── .env                          # Environment variables (API keys, secrets, etc.)
+
+
+Explanation of Key Directories:
+
+/data/
+Stores logs, historical market data, and order history for later analysis or debugging.
+This directory can be useful for tracking the bot’s actions and performance over time.
+
+/modules/
+Contains each of the core bot modules, such as fetching market data, executing orders, and risk management. Each module operates independently but interacts with other modules as needed.
+The structure allows for easy modularization, where individual modules can be tested and maintained separately.
+
+/config/
+Stores configuration files for different environments (sandbox, live, backtesting).
+These YAML files contain settings like API keys, trading pairs, spread size, and other parameters. This separation makes it easy to switch between different environments without changing the code.
+
+/scripts/
+Includes various Python scripts for running the bot, backtesting, and monitoring.
+You can create specific scripts like start_bot.py for live trading and run_backtest.py for running simulations with historical data.
+
+/tests/
+Contains unit tests for each module to ensure everything functions as expected. Unit testing is critical for a robust trading bot, especially when interacting with external APIs.
+You can use libraries like pytest to test each module independently.
+
+requirements.txt
+Lists the Python dependencies required to run the bot, such as ccxt for exchange API interactions, Solana SDK, and asyncio for asynchronous operations.
+
+Dockerfile
+If you’re deploying the bot on the cloud (e.g., AWS, DigitalOcean), the Dockerfile will help containerize the application to ensure consistent deployment across environments.
+
+README.md
+Provides documentation for how to set up, configure, and run the bot, including how to install dependencies, start the bot, and configure different environments.
+
+.env
+Used to store sensitive information like API keys and secrets. These are loaded dynamically into the configuration files. This keeps the sensitive data separate from the codebase.
+
+Example Workflow:
+Starting the Bot: You run python scripts/start_bot.py, which imports modules, loads configuration from /config/config_live.yaml, and starts fetching real-time data while executing the trading strategy.
+Backtesting: You use python scripts/run_backtest.py to test strategies with historical data from /data/market_data/ and review the results.
+Monitoring: A monitoring script (python scripts/monitor_bot.py) tracks bot performance and errors, writing logs into /data/logs/.
+Testing: Run pytest on /tests/ to verify the correctness of your code before deployment.
