@@ -14,40 +14,42 @@ if not HELIUS_API_KEY:
 
 HELIUS_API_URL = f"https://api.helius.xyz/v0/transactions?api-key={HELIUS_API_KEY}"
 TBALL_MINT_ADDRESS = "CWnzqQVFaD7sKsZyh116viC48G7qLz8pa5WhFpBEg9wM"
-JUPITER_AGGREGATOR_MINTS = ["..."]  # Add known Jupiter aggregator mints
-RAYDIUM_LIQUIDITY_MINTS = ["..."]   # Add known Raydium liquidity pool mints
+WSOL_MINT_ADDRESS = "So11111111111111111111111111111111111111112"
 RPC_URL = "https://api.mainnet-beta.solana.com"
-MAX_RETRIES = 5  # Max number of retries when hitting rate limits
-RETRY_DELAY = 20  # Delay in seconds after hitting a rate limit
-BATCH_SIZE = 5  # Small batch size for processing transactions (for testing)
-MAX_TRANSACTIONS = 10  # Fetch only 10 transactions for testing
+MAX_RETRIES = 5
+RETRY_DELAY = 20
+BATCH_SIZE = 5
+MAX_TRANSACTIONS = 10  # Adjust this value to fetch more transactions if needed
 
 # Construct the correct relative path to the database file
 db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../data/market_data/transactions.db'))
 
 # Set up SQLite connection and schema
-conn = sqlite3.connect(db_path)  # Use the correct relative path
+conn = sqlite3.connect(db_path)
 cursor = conn.cursor()
 
-# Create a table for transactions if not exists with UNIQUE constraint on transaction_signature
+# Create an enhanced table for transactions
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS transactions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        signature TEXT UNIQUE,
+        timestamp INTEGER,
+        transaction_type TEXT,
         from_wallet TEXT,
         to_wallet TEXT,
-        tball_sent REAL NULL,
-        tball_received REAL NULL,
-        token_transfered TEXT NULL,
-        amount_transfered REAL NULL,
-        transaction_signature TEXT UNIQUE,
-        transaction_type TEXT,
-        aggregator TEXT NULL,  
-        timestamp INTEGER
+        tball_amount REAL,
+        wsol_amount REAL,
+        other_token_amount REAL,
+        other_token_mint TEXT,
+        aggregators TEXT,
+        fee REAL,
+        success BOOLEAN,
+        raw_data TEXT
     )
 ''')
 conn.commit()
 
-# Function to get TBALL transaction signatures (limited for testing)
+
 def get_tball_signatures(mint_address, limit=MAX_TRANSACTIONS):
     signatures = []
     before_signature = None
@@ -72,7 +74,7 @@ def get_tball_signatures(mint_address, limit=MAX_TRANSACTIONS):
         if response.status_code == 200:
             result = response.json().get('result', [])
             if not result:
-                break  # No more signatures available
+                break
 
             signatures.extend([tx['signature'] for tx in result])
             before_signature = result[-1]['signature']
@@ -88,159 +90,161 @@ def get_tball_signatures(mint_address, limit=MAX_TRANSACTIONS):
 
     return signatures
 
-# Function to parse the transactions in small batches using the Helius API
-def parse_transactions_in_batches(signatures, batch_size=MAX_TRANSACTIONS):
-    headers = {
-        "Content-Type": "application/json"
-    }
+
+def parse_transactions_in_batches(signatures, batch_size=BATCH_SIZE):
+    headers = {"Content-Type": "application/json"}
     parsed_transactions = []
 
-    # Only process one batch to limit API calls
-    batch = signatures[:batch_size]
-    body = {
-        "transactions": batch
-    }
+    for i in range(0, len(signatures), batch_size):
+        batch = signatures[i:i + batch_size]
+        body = {"transactions": batch}
 
-    retries = 0
-    while retries < MAX_RETRIES:
-        response = requests.post(HELIUS_API_URL, headers=headers, data=json.dumps(body))
+        retries = 0
+        while retries < MAX_RETRIES:
+            response = requests.post(HELIUS_API_URL, headers=headers, data=json.dumps(body))
 
-        if response.status_code == 200:
-            parsed_transactions.extend(response.json())
-            break
-        elif response.status_code == 429:
-            retries += 1
-            print(f"Rate limit hit while parsing, retrying {retries}/{MAX_RETRIES} after {RETRY_DELAY} seconds...")
-            time.sleep(RETRY_DELAY)
-        else:
-            print(f"Error parsing transactions: {response.status_code}")
-            print(f"Response content: {response.content}")
-            return None
+            if response.status_code == 200:
+                parsed_transactions.extend(response.json())
+                break
+            elif response.status_code == 429:
+                retries += 1
+                print(f"Rate limit hit while parsing, retrying {retries}/{MAX_RETRIES} after {RETRY_DELAY} seconds...")
+                time.sleep(RETRY_DELAY)
+            else:
+                print(f"Error parsing transactions: {response.status_code}")
+                print(f"Response content: {response.content}")
+                return None
 
     return parsed_transactions
 
-# Function to check if a transaction involves Jupiter or Raydium aggregators
-def identify_aggregator(transfer):
-    if transfer.get("mint") in JUPITER_AGGREGATOR_MINTS:
-        return "Jupiter"
-    elif transfer.get("mint") in RAYDIUM_LIQUIDITY_MINTS:
-        return "Raydium"
-    return None
 
-# Function to extract all transactions (including transfers and swaps with aggregators)
-def extract_all_transactions(parsed_transactions):
-    all_transactions = []
+def extract_transaction_data(tx):
+    tball_transfers = []
+    wsol_transfers = []
+    other_transfers = []
+    aggregators = set()
 
-    for tx in parsed_transactions:
-        if "tokenTransfers" not in tx:
-            continue
+    # Extract fee
+    fee = tx.get('fee', 0) / 1e9  # Convert lamports to SOL
 
-        # Initialize variables to track swap information
-        tball_transfers = []
-        wsol_transfers = []
-        other_transfers = []
-        from_wallet = "Unknown"
-        to_wallet = "Unknown"
-        aggregators = set()
+    # Detect aggregators
+    if 'Jupiter' in str(tx):
+        aggregators.add('Jupiter')
+    if 'Raydium' in str(tx):
+        aggregators.add('Raydium')
 
-        # Loop through token transfers to identify swaps and fee transfers
-        for transfer in tx.get("tokenTransfers", []):
-            if transfer.get("mint") == TBALL_MINT_ADDRESS:
-                tball_transfers.append(transfer)
-                from_wallet = transfer.get("fromUserAccount", from_wallet)
-                to_wallet = transfer.get("toUserAccount", to_wallet)
-            elif transfer.get("mint") == "So11111111111111111111111111111111111111112":  # WSOL mint address
-                wsol_transfers.append(transfer)
-            else:
-                other_transfers.append(transfer)
-
-            # Check for known aggregators
-            if "Jupiter" in transfer.get("toUserAccount", ""):
-                aggregators.add("Jupiter")
-            elif "Raydium" in transfer.get("toUserAccount", ""):
-                aggregators.add("Raydium")
-
-        # Determine transaction type
-        if tball_transfers and wsol_transfers:
-            transaction_type = "Swap"
-        elif len(tball_transfers) > 1 or len(wsol_transfers) > 1:
-            transaction_type = "MultiSwap"
+    # Process token transfers
+    for transfer in tx.get('tokenTransfers', []):
+        mint = transfer.get('mint')
+        if mint == TBALL_MINT_ADDRESS:
+            tball_transfers.append(transfer)
+        elif mint == WSOL_MINT_ADDRESS:
+            wsol_transfers.append(transfer)
         else:
-            transaction_type = "Transfer"
+            other_transfers.append(transfer)
 
-        # Calculate total amounts
-        tball_sent = sum(float(t.get("tokenAmount", 0)) for t in tball_transfers if t.get("fromUserAccount"))
-        tball_received = sum(float(t.get("tokenAmount", 0)) for t in tball_transfers if t.get("toUserAccount"))
-        wsol_sent = sum(float(t.get("tokenAmount", 0)) for t in wsol_transfers if t.get("fromUserAccount"))
-        wsol_received = sum(float(t.get("tokenAmount", 0)) for t in wsol_transfers if t.get("toUserAccount"))
+    # Calculate amounts
+    tball_amount = sum(float(t['tokenAmount']) for t in tball_transfers)
+    wsol_amount = sum(float(t['tokenAmount']) for t in wsol_transfers)
+    other_amount = sum(float(t['tokenAmount']) for t in other_transfers)
+    other_mint = other_transfers[0]['mint'] if other_transfers else None
 
-        transaction = {
-            "from_wallet": from_wallet,
-            "to_wallet": to_wallet,
-            "tball_sent": tball_sent,
-            "tball_received": tball_received,
-            "wsol_sent": wsol_sent,
-            "wsol_received": wsol_received,
-            "transaction_signature": tx.get("signature"),
-            "transaction_type": transaction_type,
-            "aggregator": ", ".join(aggregators) if aggregators else None,
-            "timestamp": tx.get("timestamp")
-        }
-        all_transactions.append(transaction)
+    # Determine transaction type
+    if tball_transfers and (wsol_transfers or other_transfers):
+        transaction_type = 'Swap'
+    elif len(tball_transfers) > 1 or len(wsol_transfers) > 1:
+        transaction_type = 'MultiSwap'
+    else:
+        transaction_type = 'Transfer'
 
-    return all_transactions
+    # Get 'from' and 'to' wallets
+    from_wallet = tx.get('feePayer') or (tball_transfers[0]['fromUserAccount'] if tball_transfers else None)
+    to_wallet = tball_transfers[-1]['toUserAccount'] if tball_transfers else None
 
-# Function to save transactions into the SQLite database
-def save_all_transactions_to_db(transactions):
+    return {
+        'signature': tx.get('signature', ''),
+        'timestamp': tx.get('timestamp', 0),
+        'transaction_type': transaction_type,
+        'from_wallet': from_wallet,
+        'to_wallet': to_wallet,
+        'tball_amount': tball_amount,
+        'wsol_amount': wsol_amount,
+        'other_token_amount': other_amount,
+        'other_token_mint': other_mint,
+        'aggregators': ', '.join(aggregators) if aggregators else None,
+        'fee': fee,
+        'success': tx.get('transactionError') is None,
+        'raw_data': json.dumps(tx)
+    }
+# Add this function to handle potential errors in transaction processing
+def safe_extract_transaction_data(tx):
+    try:
+        return extract_transaction_data(tx)
+    except Exception as e:
+        print(f"Error processing transaction {tx.get('signature', 'Unknown')}: {str(e)}")
+        return None
+
+def save_transactions_to_db(transactions):
     for tx in transactions:
         try:
             cursor.execute('''
-                INSERT INTO transactions (from_wallet, to_wallet, tball_sent, tball_received, token_transfered, amount_transfered, transaction_signature, transaction_type, aggregator, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (tx['from_wallet'], tx['to_wallet'], tx['tball_sent'], tx['tball_received'],
-                  None, None, tx['transaction_signature'], tx['transaction_type'], tx['aggregator'], tx['timestamp']))
+                INSERT OR REPLACE INTO transactions
+                (signature, timestamp, transaction_type, from_wallet, to_wallet,
+                 tball_amount, wsol_amount, other_token_amount, other_token_mint,
+                 aggregators, fee, success, raw_data)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                tx['signature'], tx['timestamp'], tx['transaction_type'],
+                tx['from_wallet'], tx['to_wallet'], tx['tball_amount'],
+                tx['wsol_amount'], tx['other_token_amount'], tx['other_token_mint'],
+                tx['aggregators'], tx['fee'], tx['success'], tx['raw_data']
+            ))
         except sqlite3.IntegrityError:
-            print(f"Transaction {tx['transaction_signature']} already exists in the database, skipping insert.")
+            print(f"Transaction {tx['signature']} already exists in the database, updating.")
 
     conn.commit()
 
-if __name__ == "__main__":
-    # Fetch TBALL transaction signatures (limited for testing)
+
+def main():
     tball_signatures = get_tball_signatures(TBALL_MINT_ADDRESS, limit=MAX_TRANSACTIONS)
 
     if tball_signatures:
-        parsed_transactions = parse_transactions_in_batches(tball_signatures, batch_size=MAX_TRANSACTIONS)
+        parsed_transactions = parse_transactions_in_batches(tball_signatures)
 
         if parsed_transactions:
-            all_transactions = extract_all_transactions(parsed_transactions)
-            if all_transactions:
-                print(f"\n--- Summary ---\nTotal transactions found: {len(all_transactions)}\n")
-                for idx, tx in enumerate(all_transactions, start=1):
-                    readable_date = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(tx['timestamp']))
-                    print(f"Transaction {idx}:")
-                    print(f"  From Wallet: {tx['from_wallet']}")
-                    print(f"  To Wallet: {tx['to_wallet']}")
-                    print(f"  TBALL Sent: {tx.get('tball_sent', 'N/A')}")
-                    print(f"  TBALL Received: {tx.get('tball_received', 'N/A')}")
-                    print(f"  WSOL Sent: {tx.get('wsol_sent', 'N/A')}")
-                    print(f"  WSOL Received: {tx.get('wsol_received', 'N/A')}")
-                    print(f"  Transaction Type: {tx['transaction_type']}")
-                    print(f"  Aggregator: {tx['aggregator']}")
-                    print(f"  Transaction Signature: {tx['transaction_signature']}")
-                    print(f"  Timestamp: {readable_date}")
-                    print("-" * 40)
+            all_transactions = [extract_transaction_data(tx) for tx in parsed_transactions]
 
-                # Save transactions to the SQLite database
-                save_all_transactions_to_db(all_transactions)
-                print("Transactions saved to SQLite database.")
-            else:
-                print("No transactions found.")
+            print(f"\n--- Summary ---\nTotal transactions found: {len(all_transactions)}\n")
+            for idx, tx in enumerate(all_transactions, start=1):
+                readable_date = datetime.fromtimestamp(tx['timestamp']).strftime('%Y-%m-%d %H:%M:%S')
+                print(f"Transaction {idx}:")
+                print(f"  Signature: {tx['signature']}")
+                print(f"  Type: {tx['transaction_type']}")
+                print(f"  From: {tx['from_wallet']}")
+                print(f"  To: {tx['to_wallet']}")
+                print(f"  TBALL Amount: {tx['tball_amount']}")
+                print(f"  WSOL Amount: {tx['wsol_amount']}")
+                print(f"  Other Token Amount: {tx['other_token_amount']}")
+                print(f"  Other Token Mint: {tx['other_token_mint']}")
+                print(f"  Aggregators: {tx['aggregators']}")
+                print(f"  Fee: {tx['fee']}")
+                print(f"  Success: {tx['success']}")
+                print(f"  Timestamp: {readable_date}")
+                print("-" * 40)
+
+            save_transactions_to_db(all_transactions)
+            print("Transactions saved to SQLite database.")
         else:
             print("Failed to parse TBALL transactions.")
     else:
         print("No transaction signatures fetched.")
 
     print("\nAPI calls made:")
-    print("1 call to Solana RPC")
-    print("1 call to Helius API")
-    print("Total: 2 API calls")
+    print(f"1 call to Solana RPC")
+    print(
+        f"{len(tball_signatures) // BATCH_SIZE + (1 if len(tball_signatures) % BATCH_SIZE else 0)} calls to Helius API")
+
+
+if __name__ == "__main__":
+    main()
+    conn.close()
