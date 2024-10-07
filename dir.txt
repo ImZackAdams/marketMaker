@@ -3,6 +3,7 @@
 ├── /data/                        # For storing historical market data and logs
 │   ├── logs/                     # Logs for tracking bot activities
 │   ├── market_data/              # Historical and live market data (optional, for analysis)
+             ├── transactions.db
 │   └── order_logs/               # Order history logs for performance tracking
 │
 ├── /modules/                  # Core modules of the bot
